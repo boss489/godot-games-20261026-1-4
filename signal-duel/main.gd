@@ -6,6 +6,8 @@ const ROAD := Color("15232c")
 const LIME := Color("c6ff69")
 const CYAN := Color("76e4ed")
 const RED := Color("ff6e7a")
+# Set to the ScoreApiUrl output only after deploying score-backend/template.yaml.
+const SCORE_API_URL := "https://xwwkmrlpbbju7nla3bp5lpjxuy0mzipa.lambda-url.ap-northeast-2.on.aws/"
 var model = Model.new()
 var font: Font
 var audio: AudioStreamPlayer
@@ -22,6 +24,13 @@ var saved_state := ""
 var blink := 0.0
 var last_touch_position := Vector2.INF
 var last_touch_msec := -10000
+var score_http: HTTPRequest
+var nickname_input: LineEdit
+var board_status := ""
+var board_entries: Array = []
+var board_name := "stage-01"
+var board_return := "title"
+var request_mode := ""
 
 func _ready() -> void:
 	model.load_progress()
@@ -29,6 +38,15 @@ func _ready() -> void:
 	font = load("res://fonts/NotoSansKR.ttf")
 	audio = AudioStreamPlayer.new()
 	add_child(audio)
+	score_http = HTTPRequest.new()
+	add_child(score_http)
+	score_http.request_completed.connect(_score_response)
+	nickname_input = LineEdit.new()
+	nickname_input.placeholder_text = "닉네임 (2~16자)"
+	nickname_input.max_length = 16
+	nickname_input.add_theme_font_override("font", font)
+	nickname_input.add_theme_font_size_override("font_size", 18)
+	add_child(nickname_input)
 	for key in ["hit", "perfect", "wrong", "armor", "clear", "menu"]:
 		sounds[key] = _tone(key)
 	set_process(true)
@@ -69,6 +87,12 @@ func _sound(key: String) -> void:
 
 func _process(delta: float) -> void:
 	blink += delta
+	var scale_factor := minf(size.x / 960.0, size.y / 600.0)
+	nickname_input.visible = screen == "title" or screen == "result"
+	if nickname_input.visible:
+		var logical_pos := Vector2(318, 492) if screen == "title" else Vector2(130, 525)
+		nickname_input.position = (size - Vector2(960, 600) * scale_factor) * 0.5 + logical_pos * scale_factor
+		nickname_input.size = Vector2(236, 37) * scale_factor
 	if screen == "play":
 		var previous: String = model.state
 		model.advance(minf(delta, 0.08))
@@ -106,6 +130,61 @@ func _on_finished() -> void:
 		_sound("wrong")
 		_feedback("신호 상실 / GAME OVER", RED, 2.0)
 	screen = "result"
+	board_status = "점수를 등록하려면 닉네임을 입력하세요"
+
+func _current_board() -> String:
+	return "survival" if model.survival else "stage-%02d" % model.stage
+
+func _open_board(from_screen: String, board: String) -> void:
+	board_return = from_screen
+	board_name = board
+	screen = "leaderboard"
+	board_entries.clear()
+	board_status = "점수 서버 미설정" if SCORE_API_URL.is_empty() else "점수표 불러오는 중…"
+	if SCORE_API_URL.is_empty():
+		return
+	if score_http.get_http_client_status() != HTTPClient.STATUS_DISCONNECTED:
+		score_http.cancel_request()
+	request_mode = "get"
+	var err := score_http.request(SCORE_API_URL + "?board=" + board)
+	if err != OK:
+		board_status = "점수표 연결 실패"
+
+func _submit_score() -> void:
+	var name := nickname_input.text.strip_edges()
+	if name.length() < 2 or name.length() > 16:
+		board_status = "닉네임은 2~16자로 입력하세요"
+		return
+	if SCORE_API_URL.is_empty():
+		board_status = "점수 서버 미설정"
+		return
+	if score_http.get_http_client_status() != HTTPClient.STATUS_DISCONNECTED:
+		board_status = "이전 요청 처리 중"
+		return
+	board_status = "점수 등록 중…"
+	request_mode = "post"
+	var payload := JSON.stringify({"nickname": name, "board": _current_board(), "score": model.score})
+	var err := score_http.request(SCORE_API_URL, ["Content-Type: application/json"], HTTPClient.METHOD_POST, payload)
+	if err != OK:
+		board_status = "점수 등록 실패"
+
+func _score_response(result: int, code: int, _headers: PackedStringArray, body: PackedByteArray) -> void:
+	if result != HTTPRequest.RESULT_SUCCESS or code != 200:
+		board_status = "점수 서버 응답 실패"
+		return
+	var data: Variant = JSON.parse_string(body.get_string_from_utf8())
+	if not data is Dictionary:
+		board_status = "점수표 응답 형식 오류"
+		return
+	if request_mode == "post":
+		board_status = "기록 등록 완료" if data.get("updated", false) else "기존 최고 기록 유지"
+	else:
+		var entries: Variant = data.get("entries", [])
+		if not entries is Array:
+			board_status = "점수표 응답 형식 오류"
+			return
+		board_entries = entries.slice(0, mini(entries.size(), 10))
+		board_status = "아직 기록이 없습니다" if board_entries.is_empty() else ""
 
 func _begin(stage: int, survival: bool = false) -> void:
 	model.start(stage, survival, randi())
@@ -123,7 +202,8 @@ func _strike(side: int) -> void:
 			camera_shake = 4.0
 			for j in 12:
 				var angle := float(j) * TAU / 12.0
-				sparks.append({"pos": Vector2(480 + side * 96, 306), "velocity": Vector2(cos(angle), sin(angle)) * randf_range(50, 160), "life": 0.3})
+				var impact := Vector2(480 + side * 96, 306) if absi(side) == 1 else Vector2(480, 326 + side * 43)
+				sparks.append({"pos": impact, "velocity": Vector2(cos(angle), sin(angle)) * randf_range(50, 160), "life": 0.3})
 		"armor":
 			_feedback("장갑 파손! 다시! / AGAIN", CYAN, 0.65)
 			_sound("armor")
@@ -138,11 +218,17 @@ func _strike(side: int) -> void:
 
 func _input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and not event.echo:
+		if nickname_input.has_focus():
+			return
 		match event.keycode:
 			KEY_A, KEY_LEFT:
 				if screen == "play": _strike(-1)
 			KEY_D, KEY_RIGHT:
 				if screen == "play": _strike(1)
+			KEY_W, KEY_UP:
+				if screen == "play" and model.difficulty_stage() >= 15: _strike(-2)
+			KEY_S, KEY_DOWN:
+				if screen == "play" and model.difficulty_stage() >= 15: _strike(2)
 			KEY_ESCAPE, KEY_P:
 				if screen == "play":
 					screen = "pause"
@@ -153,6 +239,7 @@ func _input(event: InputEvent) -> void:
 				if screen in ["play", "pause", "result"]: _begin(model.stage, model.survival)
 			KEY_ENTER, KEY_SPACE:
 				if screen == "title": _begin(selected_stage)
+				elif screen == "leaderboard": screen = board_return
 				elif screen == "result":
 					if model.state == "victory" and not model.survival and model.stage < 24:
 						selected_stage = model.stage + 1
@@ -175,7 +262,12 @@ func _logical(pos: Vector2) -> Vector2:
 
 func _click(p: Vector2) -> void:
 	if screen == "play":
-		if p.y > 410:
+		if model.difficulty_stage() >= 15:
+			if Rect2(300, 407, 360, 48).has_point(p): _strike(-2)
+			elif Rect2(34, 461, 425, 61).has_point(p): _strike(-1)
+			elif Rect2(501, 461, 425, 61).has_point(p): _strike(1)
+			elif Rect2(300, 528, 360, 57).has_point(p): _strike(2)
+		elif p.y > 410:
 			_strike(-1 if p.x < 480 else 1)
 		elif p.x > 884 and p.y < 62:
 			screen = "pause"
@@ -191,6 +283,8 @@ func _click(p: Vector2) -> void:
 		elif p.y > 417 and p.y < 490:
 			if p.x < 480: _begin(selected_stage)
 			else: _begin(1, true)
+		elif p.y >= 490 and p.y < 535 and p.x > 590:
+			_open_board("title", "stage-%02d" % selected_stage)
 	elif screen == "pause":
 		if p.y > 300 and p.y < 365:
 			if p.x < 480: screen = "play"
@@ -204,6 +298,11 @@ func _click(p: Vector2) -> void:
 			else:
 				_begin(model.stage, model.survival)
 		elif p.y >= 455 and p.y < 515: screen = "title"
+		elif p.y >= 520 and p.y < 575:
+			if p.x > 620: _open_board("result", _current_board())
+			elif p.x > 385: _submit_score()
+	elif screen == "leaderboard":
+		if p.y > 510: screen = board_return
 
 func _draw() -> void:
 	var scale_factor := minf(size.x / 960.0, size.y / 600.0)
@@ -211,6 +310,7 @@ func _draw() -> void:
 	draw_set_transform((size - Vector2(960, 600) * scale_factor) * 0.5, 0.0, Vector2.ONE * scale_factor)
 	_draw_backdrop()
 	if screen == "title": _draw_title()
+	elif screen == "leaderboard": _draw_leaderboard()
 	else:
 		_draw_arena()
 		if screen == "pause": _draw_pause()
@@ -248,8 +348,8 @@ func _button(rect: Rect2, text: String, color: Color = LIME, px: int = 20) -> vo
 
 func _draw_title() -> void:
 	_text("NIGHT SIGNAL  /  야간 교차로", 480, 64, 22, CYAN, 1)
-	_text("좌우 결투 신호등", 480, 128, 48, LIME, 1)
-	_text("신호선에 닿을 때 방향을 눌러 반격하세요", 480, 169, 19, Color("b8ccc7"), 1)
+	_text("사방 결투 신호등", 480, 128, 48, LIME, 1)
+	_text("신호선에 닿을 때 방향을 눌러 반격하세요 · 상하는 15구역부터", 480, 169, 19, Color("b8ccc7"), 1)
 	_text("CAMPAIGN   •   24 INTERSECTIONS", 480, 196, 16, CYAN, 1)
 	for i in 24:
 		var col := i % 6
@@ -261,8 +361,23 @@ func _draw_title() -> void:
 		_text("%02d" % (i + 1) if available else "—", rect.position.x + 53, rect.position.y + 26, 21, LIME if available else Color("4d6971"), 1)
 	_button(Rect2(125, 418, 345, 66), "▶  %02d 구역 시작" % selected_stage)
 	_button(Rect2(490, 418, 345, 66), "◷  90초 생존", CYAN)
-	_text("A / ←  왼쪽     D / →  오른쪽     P / ESC  일시정지", 480, 531, 17, Color("a0b9bc"), 1)
-	_text("장갑: 두 번   /   전환: 차선 바뀜   /   그림자: 중앙 타이밍", 480, 562, 15, Color("8ba4a9"), 1)
+	_text("닉네임", 230, 517, 17, CYAN, 1)
+	_button(Rect2(602, 492, 230, 37), "순위표 보기", CYAN, 17)
+	_text("A/D · ←/→ 좌우    15구역부터 W/S · ↑/↓ 상하    P/ESC 일시정지", 480, 558, 16, Color("a0b9bc"), 1)
+	_text("장갑: 두 번 / 전환: 차선 변경 / 그림자: 중앙 타이밍 / 연계: 반대편 후속", 480, 584, 14, Color("8ba4a9"), 1)
+
+func _draw_leaderboard() -> void:
+	_text("순위표 / LEADERBOARD", 480, 83, 39, LIME, 1)
+	_text("90초 생존" if board_name == "survival" else "%02d 구역" % int(board_name.trim_prefix("stage-")), 480, 134, 24, CYAN, 1)
+	_panel(Rect2(120, 157, 720, 342))
+	for i in board_entries.size():
+		var row: Variant = board_entries[i]
+		if row is Dictionary:
+			_text("%02d" % (i + 1), 165, 190 + i * 29, 19, CYAN)
+			_text(str(row.get("nickname", "")).substr(0, 16), 245, 190 + i * 29, 19)
+			_text(str(row.get("score", 0)), 760, 190 + i * 29, 19, LIME, 2)
+	_text(board_status, 480, 331, 21, RED, 1)
+	_button(Rect2(320, 520, 320, 52), "돌아가기", CYAN)
 
 func _draw_arena() -> void:
 	var shake := sin(blink * 58.0) * camera_shake
@@ -277,32 +392,47 @@ func _draw_arena() -> void:
 		draw_line(Vector2(target_x, 269), Vector2(target_x, 399), LIME, 3)
 		_text("HIT", target_x, 264, 14, LIME, 1)
 		_draw_signal(target_x, 190, side)
+	if model.difficulty_stage() >= 15:
+		# Vertical lanes join at stage 15; their markers mirror the side HIT lines.
+		draw_line(Vector2(480, 125), Vector2(480, 417), Color("537c68", 0.35), 3)
+		for target_y in [236, 396]:
+			draw_line(Vector2(444, target_y), Vector2(516, target_y), LIME, 3)
+			_text("HIT", 540, target_y + 5, 14, LIME)
 	# central fighter: coat, helmet, bright two-sided baton
 	draw_circle(Vector2(480 + shake, 332), 39, Color("102c32"))
 	draw_circle(Vector2(480 + shake, 332), 28, CYAN)
 	draw_rect(Rect2(466 + shake, 312, 28, 38), Color("10222a"))
 	draw_circle(Vector2(480 + shake, 306), 13, LIME)
 	draw_line(Vector2(447 + shake, 338), Vector2(513 + shake, 338), LIME, 5)
+	if model.difficulty_stage() >= 15:
+		_button(Rect2(300, 407, 360, 48), "▲  위 / W", CYAN, 20)
+		_button(Rect2(34, 461, 425, 61), "◀  왼쪽 / A", CYAN, 23)
+		_button(Rect2(501, 461, 425, 61), "오른쪽 / D  ▶", LIME, 23)
+		_button(Rect2(300, 528, 360, 57), "▼  아래 / S", LIME, 20)
+	else:
+		_button(Rect2(34, 446, 425, 113), "◀   왼쪽   /   A", CYAN, 26)
+		_button(Rect2(501, 446, 425, 113), "오른쪽   /   D   ▶", LIME, 26)
 	for enemy in model.enemies:
 		var side: int = enemy.side
 		var ratio := clampf(float(enemy.remaining) / maxf(0.1, float(enemy.get("travel", 1.2))), -0.1, 1.0)
-		var x := 480 + side * (93 + ratio * 345)
+		var x := 480.0 + side * (93.0 + ratio * 345.0) if absi(side) == 1 else 480.0
+		var y := 326.0 if absi(side) == 1 else 316.0 + signi(side) * (80.0 + ratio * 150.0)
 		var kind: int = enemy.kind
 		var col: Color = Model.COLORS[kind]
 		var radius := 19.0 if kind != 2 else 24.0
 		if kind == 4:
 			col.a = 0.48 + sin(blink * 16.0) * 0.3
-		draw_circle(Vector2(x, 342), radius + 8, Color(col, 0.13))
-		draw_circle(Vector2(x, 326), radius, col)
-		draw_rect(Rect2(x - 13, 340, 26, 30), col)
-		draw_circle(Vector2(x - 6, 324), 2, DARK)
-		draw_circle(Vector2(x + 6, 324), 2, DARK)
-		var glyph: String = ["●", "≫", "▣", "⇄", "◇"][kind]
-		_text(glyph, x, 300, 20, col, 1)
+		draw_circle(Vector2(x, y + 16), radius + 8, Color(col, 0.13))
+		draw_circle(Vector2(x, y), radius, col)
+		draw_rect(Rect2(x - 13, y + 14, 26, 30), col)
+		draw_circle(Vector2(x - 6, y - 2), 2, DARK)
+		draw_circle(Vector2(x + 6, y - 2), 2, DARK)
+		var glyph: String = ["●", "≫", "▣", "⇄", "◇", "↪"][kind]
+		_text(glyph, x, y - 26, 20, col, 1)
 		if kind == 2 and enemy.armor == 1:
-			_text("!", x, 313, 20, RED, 1)
+			_text("!", x, y - 13, 20, RED, 1)
 		if absf(enemy.remaining) <= model.stage_rules(model.difficulty_stage()).window:
-			draw_circle(Vector2(x, 382), 6, LIME)
+			draw_circle(Vector2(x, y + 56), 6, LIME)
 	for spark in sparks:
 		draw_circle(spark.pos, 3.0 * spark.life / 0.3, LIME)
 	# traffic crossing sign over combatant
@@ -318,8 +448,7 @@ func _draw_arena() -> void:
 	draw_rect(Rect2(48, 113, 864 * clampf(model.elapsed / model.duration, 0, 1), 5), LIME)
 	if feedback_time > 0.0:
 		_text(feedback, 480, 160, 25, flash_color, 1)
-	_button(Rect2(34, 446, 425, 113), "◀   왼쪽   /   A", CYAN, 26)
-	_button(Rect2(501, 446, 425, 113), "오른쪽   /   D   ▶", LIME, 26)
+
 	if flash > 0.0:
 		draw_rect(Rect2(0, 0, 960, 600), Color(flash_color, flash * 0.12))
 
@@ -353,3 +482,6 @@ func _draw_result() -> void:
 	_button(Rect2(125, 371, 345, 62), "다음 구역" if clear and not model.survival and model.stage < 24 else "재시작", LIME)
 	_button(Rect2(490, 371, 345, 62), "재시작", CYAN)
 	_button(Rect2(320, 456, 320, 58), "메뉴 / MENU", Color("bec9bd"))
+	_button(Rect2(390, 525, 218, 43), "기록 등록", LIME, 18)
+	_button(Rect2(630, 525, 220, 43), "순위표", CYAN, 18)
+	_text(board_status, 480, 592, 15, CYAN, 1)

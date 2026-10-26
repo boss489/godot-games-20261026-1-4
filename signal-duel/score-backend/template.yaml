@@ -1,0 +1,66 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Isolated signal-duel leaderboard (24 campaign stages and survival)
+Parameters:
+  AllowedOrigin:
+    Type: String
+    Description: Exact HTTPS origin of the game site, without a trailing slash
+    AllowedPattern: '^https://[^/]+$'
+Resources:
+  ScoreTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: board
+          AttributeType: S
+        - AttributeName: nameKey
+          AttributeType: S
+      KeySchema:
+        - AttributeName: board
+          KeyType: HASH
+        - AttributeName: nameKey
+          KeyType: RANGE
+  ScoreFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: .
+      Handler: src/index.handler
+      Runtime: nodejs24.x
+      Architectures: [arm64]
+      MemorySize: 128
+      Timeout: 15
+      Environment:
+        Variables:
+          TABLE_NAME:
+            Ref: ScoreTable
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:Query
+                - dynamodb:UpdateItem
+              Resource:
+                Fn::GetAtt: [ScoreTable, Arn]
+      FunctionUrlConfig:
+        AuthType: NONE
+        Cors:
+          AllowOrigins:
+            - Ref: AllowedOrigin
+          AllowMethods:
+            - GET
+            - POST
+          AllowHeaders:
+            - content-type
+          MaxAge: 300
+Outputs:
+  ScoreUrl:
+    Description: Public Lambda function URL
+    Value:
+      Fn::GetAtt: [ScoreFunctionUrl, FunctionUrl]
+  TableName:
+    Description: Dedicated leaderboard table name
+    Value:
+      Ref: ScoreTable

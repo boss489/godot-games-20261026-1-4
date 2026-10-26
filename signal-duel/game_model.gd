@@ -1,8 +1,8 @@
 extends RefCounted
 ## Pure deterministic combat state; no rendering or wall-clock dependencies.
 
-const KIND_NAMES := ["일반", "질주", "장갑", "차선 전환", "그림자"]
-const COLORS := [Color("a8fa6b"), Color("f0c45a"), Color("f37e6e"), Color("75dcec"), Color("c8a3ff")]
+const KIND_NAMES := ["일반", "질주", "장갑", "차선 전환", "그림자", "연계"]
+const COLORS := [Color("a8fa6b"), Color("f0c45a"), Color("f37e6e"), Color("75dcec"), Color("c8a3ff"), Color("ffad6d")]
 const SAVE_PATH := "user://signal_duel_progress.cfg"
 # Beats: entry side (-1 left, +1 right), enemy kind, gap from preceding beat.
 const PATTERNS := [
@@ -58,7 +58,17 @@ func seeded_wave_index() -> int:
 	return wave_index + posmod(seed, 20) if survival else wave_index
 
 func pattern_for(number: int, wave: int) -> Array:
-	return patterns[posmod(number - 1 + wave * 7, patterns.size())]
+	var beats: Array = patterns[posmod(number - 1 + wave * 7, patterns.size())].duplicate(true)
+	if number >= 8 and wave % 3 == 0:
+		for beat in beats:
+			if beat[1] == 0:
+				beat[1] = 5
+				break
+	if number >= 15 and wave % 2 == 0 and not beats.is_empty():
+		# Introduce a plain vertical enemy first; later waves alternate up/down.
+		beats[0][0] = -2 if wave % 4 == 0 else 2
+		beats[0][1] = 0
+	return beats
 
 func start(number: int = 1, endless: bool = false, run_seed: int = 1) -> void:
 	stage = clampi(number, 1, 24)
@@ -128,7 +138,7 @@ func _damage(reason: String) -> void:
 		state = "defeat"
 
 func attack(side: int) -> Dictionary:
-	if state != "playing" or (side != -1 and side != 1):
+	if state != "playing" or not side in [-2, -1, 1, 2]:
 		return {"result": "ignored"}
 	var closest := -1
 	var remaining := INF
@@ -153,6 +163,10 @@ func attack(side: int) -> Dictionary:
 		last_event = "ARMOR BROKEN · AGAIN!"
 		return {"result": "armor"}
 	enemies.remove_at(closest)
+	if enemy.kind == 5:
+		# Follow-up is visibly outside the hit window, on the other lane.
+		var lead := maxf(0.40, window + 0.16)
+		enemies.append({"side": -side, "kind": 0, "remaining": lead, "switched": false, "armor": 0, "travel": 0.8})
 	combo += 1
 	best_combo = maxi(combo, best_combo)
 	score += 100 + mini(combo, 30) * 15
