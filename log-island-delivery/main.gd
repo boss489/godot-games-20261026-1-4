@@ -20,7 +20,7 @@ var audio: AudioStreamPlayer
 var save_path := "user://island_progress.json"
 
 func _ready() -> void:
-	ui_font = ThemeDB.fallback_font
+	ui_font = load("res://fonts/NotoSansKR.ttf")
 	var save := FileAccess.open(save_path, FileAccess.READ)
 	if save:
 		var parsed = JSON.parse_string(save.get_as_text())

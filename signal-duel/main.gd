@@ -24,8 +24,7 @@ var blink := 0.0
 func _ready() -> void:
 	model.load_progress()
 	selected_stage = model.unlocked
-	font = SystemFont.new()
-	font.font_names = PackedStringArray(["Apple SD Gothic Neo", "Noto Sans CJK KR", "Arial"])
+	font = load("res://fonts/NotoSansKR.ttf")
 	audio = AudioStreamPlayer.new()
 	add_child(audio)
 	for key in ["hit", "perfect", "wrong", "armor", "clear", "menu"]:
