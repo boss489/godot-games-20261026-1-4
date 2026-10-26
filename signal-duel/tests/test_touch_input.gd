@@ -23,14 +23,30 @@ func run_checks() -> void:
 	scene.model.enemies.append({"side": -1, "kind": 0, "remaining": 0.1, "switched": false, "armor": 0, "travel": 1.2})
 	scene._input(touch)
 	check(scene.model.health == 4 and scene.model.score == 115 and scene.model.enemies.is_empty(), "one touch scores one hit without losing health")
+	var duplicate := InputEventMouseButton.new()
+	duplicate.pressed = true
+	duplicate.button_index = MOUSE_BUTTON_LEFT
+	duplicate.position = pos
+	scene._input(duplicate)
+	check(scene.model.health == 4 and scene.model.score == 115 and scene.feedback != "너무 빨라요 / TOO EARLY", "mouse after scoring touch does not strike twice")
 	scene._begin(1)
-	scene.model.enemies.append({"side": -1, "kind": 0, "remaining": 0.1, "switched": false, "armor": 0, "travel": 1.2})
+	scene.model.enemies.append({"side": 1, "kind": 0, "remaining": 0.1, "switched": false, "armor": 0, "travel": 1.2})
 	var mouse := InputEventMouseButton.new()
 	mouse.pressed = true
 	mouse.button_index = MOUSE_BUTTON_LEFT
-	mouse.position = pos
+	mouse.position = Vector2(780, 490)
 	scene._input(mouse)
 	check(scene.model.health == 4 and scene.model.score == 115, "desktop mouse still scores a hit")
+	scene.screen = "title"
+	scene.feedback = ""
+	scene.feedback_time = 0.0
+	var start_pos := Vector2(180, 450)
+	touch.position = start_pos
+	mouse.position = start_pos
+	scene._input(touch)
+	check(scene.screen == "play" and scene.model.health == 4, "touch starts game without damage")
+	scene._input(mouse)
+	check(scene.model.health == 4 and scene.feedback != "너무 빨라요 / TOO EARLY", "same tap's mouse event must not attack on first frame")
 	print("TOUCH INPUT: %d failures" % failures)
 	scene.audio.stop()
 	scene.queue_free()

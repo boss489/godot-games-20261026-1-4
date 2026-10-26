@@ -20,6 +20,8 @@ var camera_shake := 0.0
 var sparks: Array = []
 var saved_state := ""
 var blink := 0.0
+var last_touch_position := Vector2.INF
+var last_touch_msec := -10000
 
 func _ready() -> void:
 	model.load_progress()
@@ -158,10 +160,14 @@ func _input(event: InputEvent) -> void:
 					else: _begin(model.stage, model.survival)
 				elif screen == "pause": screen = "play"
 	elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
-		var p := _logical(event.position)
-		_click(p)
-	elif event is InputEventScreenTouch and event.pressed:
+		if Time.get_ticks_msec() - last_touch_msec < 750 and event.position.distance_to(last_touch_position) < 32.0:
+			return
 		_click(_logical(event.position))
+	elif event is InputEventScreenTouch:
+		last_touch_position = event.position
+		last_touch_msec = Time.get_ticks_msec()
+		if event.pressed:
+			_click(_logical(event.position))
 
 func _logical(pos: Vector2) -> Vector2:
 	var scale_factor := minf(size.x / 960.0, size.y / 600.0)
