@@ -52,6 +52,35 @@ func run_checks() -> void:
 	scene._click(Vector2(925, 42))
 	scene._click(Vector2(580, 330))
 	check(scene.screen == "play" and scene.model.stage == 2 and scene.model.health == 4, "pause restart resets")
+	check(scene.font != null, "NotoSansKR font explicitly loaded")
+	check(FileAccess.file_exists("res://fonts/OFL.txt"), "font license OFL.txt preserved")
+	check(scene.nickname_input != null and scene.nickname_input.get_theme_font("font") == scene.font, "nickname input uses Korean font")
+	scene._begin(15)
+	var top_spawn: Vector2 = scene._enemy_pos({"side": -2, "kind": 0, "remaining": 1.0, "switched": false, "armor": 0})
+	var bottom_spawn: Vector2 = scene._enemy_pos({"side": 2, "kind": 0, "remaining": 1.0, "switched": false, "armor": 0})
+	check(top_spawn.y > 115.0 and bottom_spawn.y < 380.0, "stage 15 vertical enemies do not overlap HUD or touch controls")
+	scene.model.enemies.append({"side": -1, "kind": 2, "remaining": 0.01, "switched": false, "armor": 0})
+	scene._click(Vector2(250, 505))
+	check(scene.strike_result == "armor" and scene.feedback.find("장갑") != -1, "armored enemy first hit shows armor break feedback")
+	scene._click(Vector2(250, 505))
+	check(scene.strike_result == "hit" and scene.hit_rings.size() > 0, "second hit defeats armored enemy and spawns hit ring")
+	scene.model.enemies.append({"side": 1, "kind": 0, "remaining": 0.01, "switched": false, "armor": 0})
+	var key_right := InputEventKey.new()
+	key_right.pressed = true
+	key_right.keycode = KEY_D
+	scene._input(key_right)
+	check(scene.model.enemies.is_empty() and scene.strike_side == 1, "keyboard D strikes right enemy")
+	scene.model.enemies.append({"side": -2, "kind": 0, "remaining": 0.01, "switched": false, "armor": 0})
+	var key_up := InputEventKey.new()
+	key_up.pressed = true
+	key_up.keycode = KEY_W
+	scene._input(key_up)
+	check(scene.model.enemies.is_empty() and scene.strike_side == -2, "keyboard W strikes upper enemy at stage 15")
+	var orig_size: Vector2 = scene.size
+	scene.size = Vector2(430, 760)
+	var mobile_center: Vector2 = scene._logical(Vector2(215, 380))
+	check(mobile_center.distance_to(Vector2(480, 300)) < 1.0, "narrow mobile viewport maps center to logical center")
+	scene.size = orig_size
 	print("UI INTEGRATION: %d failures" % errors)
 	scene.audio.stop()
 	await create_timer(0.25).timeout
